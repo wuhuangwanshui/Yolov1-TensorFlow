@@ -93,7 +93,7 @@ class YOLONET(object):
                                            activation_fn=None,
                                            scope='fc_36')
                 # [Batch, 7, 7, 30] reshape 预测结果
-                net = tf.reshape(net, name='predicts', shape=[None, self.cell_size, self.cell_size,
+                net = tf.reshape(net, name='predicts', shape=[-1, self.cell_size, self.cell_size,
                                                               5 * self.boxes_per_cell + self.class_num])
         return net
 
@@ -105,7 +105,7 @@ class YOLONET(object):
             labels: label[Batch, 7, 7, 25], [Batch, (h方向), (w方向), 25]
                     为与计算机存储图片格式相同,我们存储标签的时候先按 h / w 顺序存储.
         """
-        with tf.name_scope('Predict Tensor'):
+        with tf.name_scope('Predict_Tensor'):
             ############## 预测 ##############
             """
             1. 预测坐标: x, y 基于cell, sqrt(w), sqrt(h) 基于全图 (0-1)范围内
@@ -113,22 +113,22 @@ class YOLONET(object):
             """
             # 1. Bounding box 坐标预测 [batch, 7, 7, :8] >> shape=[batch, 7, 7, 2, 4]
             pre_boxes = tf.reshape(predicts[..., : 4 * self.boxes_per_cell],
-                                   shape=[None, self.cell_size, self.cell_size, self.boxes_per_cell, 4])
+                                   shape=[-1, self.cell_size, self.cell_size, self.boxes_per_cell, 4])
             # 2. Bounding box 置信度预测 [batch, 7, 7, 8:10] >> shape=[batch, 7, 7, 2]
             pre_confidence = predicts[..., 4 * self.boxes_per_cell: 5 * self.boxes_per_cell]
             # 3. class 类别预测 [batch, 7, 7, 10:] >> shape=[batch, 7, 7, 20]
             pre_class = predicts[..., 5 * self.boxes_per_cell:]
-        with tf.name_scope('Label Tensor'):
+        with tf.name_scope('Label_Tensor'):
             ############## 标签 ##############
             """
             1. 标签坐标: x,y,w,h 均基于全图(0-1)
             """
             # 1. box response_label [batch, 7, 7, 0]  >> shape=[batch,7, 7, 1]
             # lab_response 只负责标记cell中是否有object,置信度标签需要跟IOU实时计算
-            lab_response = labels[..., 0]
+            lab_response = tf.expand_dims(labels[..., 0], -1)
             # 2. box 坐标label [batch, 7, 7, 1:5] >> shape=[batch, 7, 7, 2, 4]
             lab_boxes = tf.reshape(labels[..., 1:5],
-                                   shape=[None, self.cell_size, self.cell_size, 1, 4])
+                                   shape=[-1, self.cell_size, self.cell_size, 1, 4])
             lab_boxes = tf.tile(lab_boxes, [1, 1, 1, self.boxes_per_cell, 1])
             # 3. class 类别标签 [batch, 7, 7, 5:] >> shape=[batch, 7, 7, 20]
             lab_class = labels[..., 5:]
@@ -174,7 +174,7 @@ class YOLONET(object):
         # 乘以 label_response 来去除掉没有Object位置多计算出的类别损失
         # 注意一个cell中是否有物体是通过置信度损失来回归的
         # 这种分开的思想让不同位置的参数回归不同属性,而不是把它们融合在一起
-        with tf.name_scope('class loss'):
+        with tf.name_scope('class_loss'):
             delta = lab_response * (pre_class - lab_class)
             class_loss = self.class_scale * tf.reduce_mean(tf.reduce_sum(tf.square(delta), axis=[1, 2, 3]),
                                                            name='class_loss')
@@ -194,15 +194,15 @@ class YOLONET(object):
             object_mask: 目标掩模 [batch, 7, 7, 2] 有目标的位置是1,其余为0
             no_object_mask: 非目标掩模 [batch, 7, 7, 2] 没有目标的位置是1,其余为0
         """
-        with tf.name_scope('Confidence loss'):
-            with tf.name_scope("Object Confidence loss"):
+        with tf.name_scope('Confidence_loss'):
+            with tf.name_scope("Object_Confidence_loss"):
                 # 用目标掩模进行判断是否有目标
                 # 实际是 object_mask * pre_confidence - object_mask * iou_pre_label
                 # 我们将式子合并之后变为下面的样子
                 object_confidence_delta = object_mask * (pre_confidence - iou_pre_label)
                 object_confidence_loss = self.object_confidence_scale * tf.reduce_mean(
                     tf.reduce_sum(tf.square(object_confidence_delta), axis=[1, 2, 3]))
-            with tf.name_scope('No Object Confidence loss'):
+            with tf.name_scope('No_Object_Confidence_loss'):
                 # 只要预测出置信度就是错的,我们用掩模抑制
                 # 实际是 no_object_mask * pre_confidence - no_object_mask * 0 因为这些位置没有Object,因此iou即为0
                 no_object_confidence_delta = no_object_mask * pre_confidence
@@ -224,7 +224,7 @@ class YOLONET(object):
         Returns:
 
         """
-        with tf.name_scope('Coord loss'):
+        with tf.name_scope('Coord_loss'):
             coord_mask = tf.expand_dims(object_mask, axis=-1)
             cell_lab_boxes = self.label_to_pre_cood(lab_boxes)
             coord_delta = coord_mask * (pre_boxes - cell_lab_boxes)
@@ -256,30 +256,30 @@ class YOLONET(object):
         # 1. 沿着axis=2的方向逐渐增大,我们希望shape=[1, 7, 7, 2(bounding box), 1]1
         offset_axis_2 = tf.tile(tf.expand_dims(tf.range(7), axis=0),
                                 multiples=[7, 1])
-        offset_axis_2 = tf.tile(tf.reshape(offset_axis_2, shape=[1, 7, 7, 1, 1]),
-                                multiples=[1, 1, 1, 2, 1])
+        offset_axis_2 = tf.tile(tf.reshape(offset_axis_2, shape=[1, 7, 7, 1]),
+                                multiples=[1, 1, 1, 2])
         # 3. 沿着axis=1的方向变大
-        offset_axis_1 = tf.transpose(offset_axis_2, (0, 2, 1, 3, 4))
+        offset_axis_1 = tf.transpose(offset_axis_2, (0, 2, 1, 3))
 
         w = tf.square(pre_boxes[..., 2])
         h = tf.square(pre_boxes[..., 3])
 
         # 4. 计算x的时候.因为图像是以h, w格式存储的,也就是 x变化 在axis=2上递增
-        global_x = (pre_boxes[..., 0] + offset_axis_2) / self.cell_size
-        global_y = (pre_boxes[..., 1] + offset_axis_1) / self.cell_size
+        global_x = (pre_boxes[..., 0] + tf.to_float(offset_axis_2)) / self.cell_size
+        global_y = (pre_boxes[..., 1] + tf.to_float(offset_axis_1)) / self.cell_size
         global_pre_boxes = tf.stack([global_x, global_y, w, h], axis=-1)
         return global_pre_boxes
 
     def label_to_pre_cood(self, lab_boxes):
         offset_axis_2 = tf.tile(tf.expand_dims(tf.range(7), axis=0),
                                 multiples=[7, 1])
-        offset_axis_2 = tf.tile(tf.reshape(offset_axis_2, shape=[1, 7, 7, 1, 1]),
-                                multiples=[1, 1, 1, 2, 1])
-        offset_axis_1 = tf.transpose(offset_axis_2, (0, 2, 1, 3, 4))
+        offset_axis_2 = tf.tile(tf.reshape(offset_axis_2, shape=[1, 7, 7, 1]),
+                                multiples=[1, 1, 1, 2])
+        offset_axis_1 = tf.transpose(offset_axis_2, (0, 2, 1, 3))
         sqrt_w = tf.sqrt(lab_boxes[..., 2])
         sqrt_h = tf.sqrt(lab_boxes[..., 3])
-        cell_x = lab_boxes[..., 0] * self.cell_size - offset_axis_2
-        cell_y = lab_boxes[..., 1] * self.cell_size - offset_axis_1
+        cell_x = lab_boxes[..., 0] * self.cell_size - tf.to_float(offset_axis_2)
+        cell_y = lab_boxes[..., 1] * self.cell_size - tf.to_float(offset_axis_1)
         cell_lab_boxes = tf.stack([cell_x, cell_y, sqrt_w, sqrt_h], axis=-1)
         return cell_lab_boxes
 
